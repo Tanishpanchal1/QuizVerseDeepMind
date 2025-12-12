@@ -1,3 +1,6 @@
+// server.mjs (drop-in replacement)
+// Node 18+ recommended (global fetch available). If older Node, install node-fetch.
+
 import express from 'express'
 import cors from 'cors'
 import dotenv from 'dotenv'
@@ -7,55 +10,161 @@ dotenv.config()
 const app = express()
 const PORT = process.env.PORT || 5000
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY
-const MODEL_ID = process.env.GEMINI_MODEL_ID || 'gemini-2.5-flash'
+// Mistral config (set these in env)
+const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY
+const MISTRAL_MODEL_ID = process.env.MISTRAL_MODEL_ID || "mistral-tiny"; // change if you want another model
 
-if (!GEMINI_API_KEY) {
-  console.error('Missing GEMINI_API_KEY in environment')
+if (!MISTRAL_API_KEY) {
+  console.error('Missing MISTRAL_API_KEY in environment')
   process.exit(1)
-}
-
-async function callGemini(prompt) {
-  const url = `https://generativelanguage.googleapis.com/v1/models/${MODEL_ID}:generateContent?key=${GEMINI_API_KEY}`
-
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: prompt }]
-        }
-      ]
-    })
-  })
-
-  if (!resp.ok) {
-    const text = await resp.text()
-    throw new Error(`Gemini API error ${resp.status}: ${text}`)
-  }
-
-  const data = await resp.json()
-  const parts =
-    data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || ''
-
-  return parts
 }
 
 app.use(cors())
 app.use(express.json())
 
-// In-memory session storage (OK for local dev)
+// In-memory session storage (OK for local dev). Use Redis / Firestore in production.
 const sessions = new Map()
 
+/* ----------------- Utilities ----------------- */
+
+function extractJsonFromText(raw) {
+  if (!raw || typeof raw !== 'string') throw new Error('No text to parse')
+  // try direct parse
+  try { return JSON.parse(raw) } catch (e) {}
+  // collect bracket segments
+  const possible = []
+  for (const [open, close] of [['{','}'], ['[',']']]) {
+    let start = raw.indexOf(open)
+    while (start !== -1) {
+      // find corresponding close by searching forward (not perfect for nested, but works for common outputs)
+      const end = raw.indexOf(close, start + 1)
+      if (end === -1) break
+      possible.push(raw.slice(start, end + 1))
+      start = raw.indexOf(open, start + 1)
+    }
+  }
+  for (const cand of possible) {
+    try { return JSON.parse(cand) } catch (e) {}
+  }
+  // fallback slice between first [ and last ]
+  const s = raw.indexOf('[')
+  const e = raw.lastIndexOf(']')
+  if (s !== -1 && e !== -1 && e > s) {
+    try { return JSON.parse(raw.slice(s, e + 1)) } catch (ex) {}
+  }
+  throw new Error('No valid JSON found in model response')
+}
+
+function matchAnswerToOption(answerText, question) {
+  if (!question || !Array.isArray(question.options)) return false
+  const clean = String(answerText || '').toLowerCase().trim()
+
+  const letters = ['a','b','c','d']
+  if (clean.length === 1 && letters.includes(clean)) {
+    return letters.indexOf(clean) === question.correctOptionIndex
+  }
+
+  if (/^[1-4]$/.test(clean)) {
+    return parseInt(clean,10) - 1 === question.correctOptionIndex
+  }
+  if (/^[0-3]$/.test(clean)) {
+    return parseInt(clean,10) === question.correctOptionIndex
+  }
+
+  const opts = question.options.map(o => String(o || '').toLowerCase().trim())
+  if (opts[question.correctOptionIndex] === clean) return true
+  if (clean.length >= 2 && opts[question.correctOptionIndex].includes(clean)) return true
+
+  return false
+}
+
+/**
+ * callMistral: posts to Mistral Chat Completions endpoint
+ * - returns a string with the assistant response (or throws)
+ * - uses timeout and a single retry by default
+ */
+async function callMistral(prompt, { timeoutMs = 20000, retries = 1 } = {}) {
+  const url = 'https://api.mistral.ai/v1/chat/completions'
+  const body = {
+    model: MISTRAL_MODEL_ID,
+    messages: [
+      { role: 'user', content: prompt }
+    ]
+    // you may add model params (max_tokens, temperature, top_p) depending on your usage & quota
+  }
+
+  let lastErr = null
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController()
+    const id = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${MISTRAL_API_KEY}`
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      })
+      clearTimeout(id)
+
+      if (!resp.ok) {
+        const txt = await resp.text().catch(() => '')
+        throw new Error(`Mistral API error ${resp.status}: ${txt}`)
+      }
+
+      const data = await resp.json()
+
+      // Defensive extraction: Mistral responses can vary; try common shapes:
+      // - data.choices[0].message.content (OpenAI-like)
+      // - data.choices[0].content
+      // - data.choices[0].message or data.choices[0].message.content[0].text
+      let out = ''
+      const c0 = data?.choices?.[0]
+      if (c0) {
+        if (c0.message && typeof c0.message.content === 'string') out = c0.message.content
+        else if (c0.content && typeof c0.content === 'string') out = c0.content
+        else if (c0.message && Array.isArray(c0.message.content)) {
+          // sometimes content is chunked
+          out = c0.message.content.map(chunk => (chunk?.text || chunk?.content || '')).join('')
+        } else if (typeof c0 === 'string') out = c0
+      }
+
+      // If still empty, try alternate locations
+      if (!out) {
+        out = (data?.output?.[0]?.content) || (data?.result) || ''
+      }
+
+      // Final fallback: return raw JSON stringified so caller can attempt parsing
+      if (!out) return JSON.stringify(data)
+
+      return out
+    } catch (err) {
+      lastErr = err
+      if (err.name === 'AbortError') lastErr = new Error('Mistral request timed out')
+      if (attempt < retries) await new Promise(r => setTimeout(r, 300 * (attempt + 1)))
+    } finally {
+      clearTimeout(id)
+    }
+  }
+  throw lastErr
+}
+
+/* ----------------- Routes ----------------- */
+
 app.get('/', (req, res) => {
-  res.json({ status: 'ok', message: 'QuizVerse AI backend is running' })
+  res.json({ status: 'ok', message: 'QuizVerse AI backend (Mistral) is running' })
 })
 
 app.post('/api/start-session', async (req, res) => {
   try {
-    const { subject = 'computer science', topic = 'data structures', count = 5, difficulty = 'medium' } = req.body || {}
+    const body = req.body || {}
+    const subject = String(body.subject || 'computer science').slice(0, 80)
+    const topic = String(body.topic || 'data structures').slice(0, 200)
+    let count = parseInt(body.count, 10)
+    if (Number.isNaN(count) || count <= 0 || count > 20) count = 5 // cap to 20 to respect free tier
+    const difficulty = String(body.difficulty || 'medium').toLowerCase()
 
     const prompt = `You are an AI tutor generating quiz questions for a student.
 Generate ${count} multiple-choice questions about ${topic} in ${subject}.
@@ -68,55 +177,39 @@ Return ONLY a valid JSON array (no markdown, no extra text) where each item has:
 - options: array of exactly 4 answer options (strings)
 - correctOptionIndex: integer 0-3 (index into options)
 - concepts: array of short topic tags (strings)
-- source: string, set to "gemini"
+- source: string, set to "mistral"
 - confidence: number between 0.7 and 0.99
-
-Example output:
-[
-  {
-    "qId": "q1",
-    "text": "Which traversal visits left-root-right?",
-    "type": "MCQ",
-    "options": ["Preorder", "Inorder", "Postorder", "Levelorder"],
-    "correctOptionIndex": 1,
-    "concepts": ["tree traversal"],
-    "source": "gemini",
-    "confidence": 0.9
-  }
-]
 `
 
-    const rawText = await callGemini(prompt)
-
-    // Try to extract JSON array from the response
-    const start = rawText.indexOf('[')
-    const end = rawText.lastIndexOf(']') + 1
-    const jsonText = start !== -1 && end !== -1 ? rawText.slice(start, end) : rawText
+    const rawText = await callMistral(prompt, { timeoutMs: 25000, retries: 1 })
 
     let parsed
     try {
-      parsed = JSON.parse(jsonText)
+      parsed = extractJsonFromText(String(rawText || ''))
     } catch (e) {
-      console.error('Failed to parse Gemini JSON, raw:', rawText)
-      return res.status(500).json({ error: 'Failed to parse questions from Gemini' })
+      console.error('Failed to parse Mistral JSON, raw:', rawText)
+      return res.status(500).json({ error: 'Failed to parse questions from Mistral' })
     }
 
     const questions = (Array.isArray(parsed) ? parsed : []).map((q, idx) => ({
       qId: q.qId || `q${idx + 1}`,
       text: q.text || 'Untitled question',
       type: (q.type || 'MCQ').toUpperCase(),
-      options: Array.isArray(q.options) && q.options.length ? q.options : ['Option A', 'Option B', 'Option C', 'Option D'],
+      options:
+        Array.isArray(q.options) && q.options.length === 4
+          ? q.options
+          : (q.options && q.options.length ? q.options.slice(0, 4) : ['Option A', 'Option B', 'Option C', 'Option D']),
       correctOptionIndex:
         typeof q.correctOptionIndex === 'number' && q.correctOptionIndex >= 0 && q.correctOptionIndex < 4
           ? q.correctOptionIndex
           : 0,
       concepts: Array.isArray(q.concepts) ? q.concepts : ['general'],
-      source: q.source || 'gemini',
+      source: q.source || 'mistral',
       confidence: typeof q.confidence === 'number' ? q.confidence : 0.9
     }))
 
-    const sessionId = `gemini-${Date.now()}`
-    sessions.set(sessionId, questions)
+    const sessionId = `mistral-${Date.now()}-${Math.random().toString(36).slice(2,8)}`
+    sessions.set(sessionId, { questions, createdAt: Date.now() })
 
     res.json({
       sessionId,
@@ -132,26 +225,18 @@ Example output:
 app.post('/api/submit-answer', async (req, res) => {
   try {
     const { sessionId, questionId, answerText } = req.body || {}
-
-    if (!sessionId || !questionId || !answerText) {
+    if (!sessionId || !questionId || answerText === undefined) {
       return res.status(400).json({ error: 'Missing sessionId, questionId or answerText' })
     }
 
-    const questions = sessions.get(sessionId) || []
-    const question = questions.find(q => q.qId === questionId)
+    const session = sessions.get(sessionId)
+    if (!session) return res.status(400).json({ error: 'Unknown sessionId' })
 
-    if (!question) {
-      return res.status(400).json({ error: 'Unknown question for this session' })
-    }
+    const question = (session.questions || []).find(q => q.qId === questionId)
+    if (!question) return res.status(400).json({ error: 'Unknown question for this session' })
 
-    let isCorrect = false
+    const localIsCorrect = matchAnswerToOption(answerText, question)
 
-    if (question.type === 'MCQ' && typeof question.correctOptionIndex === 'number') {
-      const correctText = (question.options?.[question.correctOptionIndex] || '').toLowerCase().trim()
-      isCorrect = correctText === String(answerText).toLowerCase().trim()
-    }
-
-    // Ask Gemini for feedback / explanation
     const gradingPrompt = `You are grading a student's answer.
 
 Question: ${question.text}
@@ -170,37 +255,32 @@ Return ONLY a JSON object with:
   - tip: short string
 `
 
-    const gradeRaw = await callGemini(gradingPrompt)
-    let gradeJson
+    let gradeJson = null
     try {
-      const s = gradeRaw.indexOf('{')
-      const e = gradeRaw.lastIndexOf('}') + 1
-      const objText = s !== -1 && e !== -1 ? gradeRaw.slice(s, e) : gradeRaw
-      gradeJson = JSON.parse(objText)
+      const gradeRaw = await callMistral(gradingPrompt, { timeoutMs: 20000, retries: 1 })
+      gradeJson = extractJsonFromText(String(gradeRaw || ''))
+      if (typeof gradeJson.isCorrect !== 'boolean') gradeJson.isCorrect = localIsCorrect
+      if (typeof gradeJson.score !== 'number') gradeJson.score = gradeJson.isCorrect ? 1 : 0.5
+      if (!gradeJson.feedback) gradeJson.feedback = gradeJson.isCorrect ? 'Good job.' : 'Please review the concept.'
+      if (!gradeJson.explanation) gradeJson.explanation = { steps: [], tip: '' }
     } catch (e) {
-      console.error('Failed to parse Gemini grading JSON, raw:', gradeRaw)
-      gradeJson = null
-    }
-
-    const responsePayload = gradeJson || {
-      isCorrect,
-      score: isCorrect ? 1 : 0.5,
-      feedback: isCorrect
-        ? 'Nice work! Your reasoning matches the key idea.'
-        : 'You are close — revisit the core concept and try again.',
-      mistakeType: isCorrect ? null : 'partial_omission',
-      conceptsInvolved: question.concepts || [],
-      explanation: {
-        steps: [
-          'Recall the formal definition from your notes.',
-          'Try to construct a small example by hand.',
-          'Compare your answer to the example behaviour.'
-        ],
-        tip: 'Focus on the key concept the question is testing.'
+      console.warn('grading via Mistral failed, using fallback', e?.message)
+      gradeJson = {
+        isCorrect: localIsCorrect,
+        score: localIsCorrect ? 1 : 0.5,
+        feedback: localIsCorrect ? 'Nice work! Your answer matches.' : 'Close — revise the core concept and try again.',
+        mistakeType: localIsCorrect ? null : 'partial_omission',
+        conceptsInvolved: question.concepts || [],
+        explanation: {
+          steps: ['Review the definition', 'Work a small example', 'Compare with the options'],
+          tip: 'Focus on the tested property.'
+        }
       }
     }
 
-    res.json(responsePayload)
+    session.lastSubmission = { questionId, answerText, result: gradeJson, ts: Date.now() }
+
+    res.json(gradeJson)
   } catch (err) {
     console.error('submit-answer error:', err)
     res.status(500).json({ error: 'Failed to grade answer' })
@@ -210,29 +290,21 @@ Return ONLY a JSON object with:
 app.post('/api/end-session', (req, res) => {
   try {
     const { sessionId } = req.body || {}
-    if (!sessionId) {
-      return res.status(400).json({ error: 'Missing sessionId' })
-    }
+    if (!sessionId) return res.status(400).json({ error: 'Missing sessionId' })
+    const session = sessions.get(sessionId) || { questions: [] }
+    const questions = session.questions || []
 
-    const questions = sessions.get(sessionId) || []
     const concepts = {}
-
     questions.forEach(q => {
-      ;(q.concepts || []).forEach(c => {
-        concepts[c] = concepts[c] || 0.6
-      })
+      (q.concepts || []).forEach(c => { concepts[c] = concepts[c] || 0.6 })
     })
 
     const masteryMap = concepts
+    sessions.delete(sessionId) // cleanup
 
     res.json({
       masteryMap,
-      nextBoosters: Object.keys(masteryMap).slice(0, 2).map(topic => ({
-        topic,
-        count: 5,
-        difficulty: 'easy',
-        reason: 'low mastery'
-      })),
+      nextBoosters: Object.keys(masteryMap).slice(0, 2).map(topic => ({ topic, count: 5, difficulty: 'easy', reason: 'low mastery' })),
       timePerConcept: masteryMap
     })
   } catch (err) {
@@ -242,5 +314,5 @@ app.post('/api/end-session', (req, res) => {
 })
 
 app.listen(PORT, () => {
-  console.log(`QuizVerse AI backend listening on port ${PORT}`)
+  console.log(`QuizVerse AI backend (Mistral) listening on port ${PORT}`)
 })

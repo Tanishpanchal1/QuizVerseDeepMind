@@ -29,31 +29,71 @@ const sessions = new Map()
 
 function extractJsonFromText(raw) {
   if (!raw || typeof raw !== 'string') throw new Error('No text to parse')
+
+  
+  // NEW: Strip markdown code blocks first
+  raw = raw.replace(/``````\s*/g, '').trim()
+  
   // try direct parse
   try { return JSON.parse(raw) } catch (e) {}
-  // collect bracket segments
-  const possible = []
-  for (const [open, close] of [['{','}'], ['[',']']]) {
-    let start = raw.indexOf(open)
-    while (start !== -1) {
-      // find corresponding close by searching forward (not perfect for nested, but works for common outputs)
-      const end = raw.indexOf(close, start + 1)
-      if (end === -1) break
-      possible.push(raw.slice(start, end + 1))
-      start = raw.indexOf(open, start + 1)
+  
+  console.log('🔍 Attempting to extract JSON from text...')
+  
+  // Step 1: Try direct parse
+  try { 
+    const result = JSON.parse(raw)
+    console.log('✅ Direct JSON parse successful')
+    return result
+  } catch (e) {
+    console.log('⚠️  Direct parse failed, trying extraction...')
+  }
+  
+  // Step 2: Remove markdown code blocks
+  let cleaned = raw
+  
+  // Remove `````` blocks
+  
+  cleaned = cleaned.replace(/```\s*/g, '')
+  
+  console.log('📝 After removing markdown:', cleaned.slice(0, 200))
+  
+  // Try parsing cleaned version
+  try {
+    const result = JSON.parse(cleaned.trim())
+    console.log('✅ Cleaned JSON parse successful')
+    return result
+  } catch (e) {
+    console.log('⚠️  Cleaned parse failed, trying bracket extraction...')
+  }
+  
+  // Step 3: Extract first complete JSON array or object
+  const arrayMatch = cleaned.match(/\[[\s\S]*\]/)
+  if (arrayMatch) {
+    try {
+      const result = JSON.parse(arrayMatch[0])
+      console.log('✅ Array extraction successful')
+      return result
+    } catch (e) {
+      console.log('⚠️  Array extraction failed')
     }
   }
-  for (const cand of possible) {
-    try { return JSON.parse(cand) } catch (e) {}
+  
+  const objectMatch = cleaned.match(/\{[\s\S]*\}/)
+  if (objectMatch) {
+    try {
+      const result = JSON.parse(objectMatch[0])
+      console.log('✅ Object extraction successful')
+      return result
+    } catch (e) {
+      console.log('⚠️  Object extraction failed')
+    }
   }
-  // fallback slice between first [ and last ]
-  const s = raw.indexOf('[')
-  const e = raw.lastIndexOf(']')
-  if (s !== -1 && e !== -1 && e > s) {
-    try { return JSON.parse(raw.slice(s, e + 1)) } catch (ex) {}
-  }
+  
+  console.error('🔴 All extraction attempts failed')
+  console.error('Raw text:', raw)
   throw new Error('No valid JSON found in model response')
 }
+
 
 function matchAnswerToOption(answerText, question) {
   if (!question || !Array.isArray(question.options)) return false
@@ -90,8 +130,12 @@ async function callMistral(prompt, { timeoutMs = 20000, retries = 1 } = {}) {
     messages: [
       { role: 'user', content: prompt }
     ]
-    // you may add model params (max_tokens, temperature, top_p) depending on your usage & quota
   }
+
+  console.log('🔵 Calling Mistral API...')
+  console.log('Model:', MISTRAL_MODEL_ID)
+  console.log('API Key present:', !!MISTRAL_API_KEY)
+  console.log('API Key starts with:', MISTRAL_API_KEY?.slice(0, 10) + '...')
 
   let lastErr = null
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -109,39 +153,44 @@ async function callMistral(prompt, { timeoutMs = 20000, retries = 1 } = {}) {
       })
       clearTimeout(id)
 
+      console.log('🟢 Mistral Response Status:', resp.status)
+
       if (!resp.ok) {
         const txt = await resp.text().catch(() => '')
+        console.error('🔴 Mistral API Error:', resp.status, txt)
         throw new Error(`Mistral API error ${resp.status}: ${txt}`)
       }
 
       const data = await resp.json()
+      console.log('📦 Mistral Response Data:', JSON.stringify(data, null, 2))
 
-      // Defensive extraction: Mistral responses can vary; try common shapes:
-      // - data.choices[0].message.content (OpenAI-like)
-      // - data.choices[0].content
-      // - data.choices[0].message or data.choices[0].message.content[0].text
+      // Defensive extraction
       let out = ''
       const c0 = data?.choices?.[0]
       if (c0) {
         if (c0.message && typeof c0.message.content === 'string') out = c0.message.content
         else if (c0.content && typeof c0.content === 'string') out = c0.content
         else if (c0.message && Array.isArray(c0.message.content)) {
-          // sometimes content is chunked
           out = c0.message.content.map(chunk => (chunk?.text || chunk?.content || '')).join('')
         } else if (typeof c0 === 'string') out = c0
       }
 
-      // If still empty, try alternate locations
       if (!out) {
         out = (data?.output?.[0]?.content) || (data?.result) || ''
       }
 
-      // Final fallback: return raw JSON stringified so caller can attempt parsing
-      if (!out) return JSON.stringify(data)
+      if (!out) {
+        console.error('🔴 Could not extract content from Mistral response')
+        return JSON.stringify(data)
+      }
+
+      console.log('✅ Extracted content length:', out.length)
+      console.log('📝 First 300 chars:', out.slice(0, 300))
 
       return out
     } catch (err) {
       lastErr = err
+      console.error('🔴 Attempt', attempt + 1, 'failed:', err.message)
       if (err.name === 'AbortError') lastErr = new Error('Mistral request timed out')
       if (attempt < retries) await new Promise(r => setTimeout(r, 300 * (attempt + 1)))
     } finally {

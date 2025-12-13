@@ -30,13 +30,16 @@ import {
   Lightbulb,
   X,
   Link2,
-  QrCode
+  QrCode,
+  Wand2,
+  Loader2
 } from 'lucide-react'
 import { useQuiz } from '../contexts/QuizContext'
 import { useToast } from '../contexts/ToastContext'
 import { useAuth } from '../contexts/AuthContext'
 import { testFirebaseConnection } from '../firebase/config'
 import AuthenticationModal from '../components/AuthenticationModal'
+import AIQuizGenerator from '../components/AIQuizGenerator'
 import { saveDraft as saveDraftRemote, updateDraft as updateDraftRemote, getDraft as getDraftRemote } from '../services/DraftsService'
 
 const CreateQuiz = () => {
@@ -83,7 +86,8 @@ const CreateQuiz = () => {
   // Authentication modal state
   const [showAuthModal, setShowAuthModal] = useState(false)
   
-  // Monitor quizCode changes for debugging if needed
+  // Creation mode state
+  const [creationMode, setCreationMode] = useState('manual') // 'manual' or 'ai'
 
   // Load draft from localStorage on component mount
   useEffect(() => {
@@ -97,7 +101,6 @@ const CreateQuiz = () => {
           setQuestions(savedQuestions)
           setLastSaved(new Date(timestamp))
           setHasUnsavedChanges(true)
-          // Loaded quiz draft from localStorage
         } else {
           localStorage.removeItem('quizDraft')
         }
@@ -130,7 +133,6 @@ const CreateQuiz = () => {
         if (launchedId) {
           const code = passedCode || launchedId.slice(-6).toUpperCase()
           setQuizCode(code)
-          // Optionally restore title for the success info card
           try {
             const metaRaw = sessionStorage.getItem('launchedDraftMeta')
             if (metaRaw) {
@@ -140,7 +142,6 @@ const CreateQuiz = () => {
                 title: meta.title || prev.title,
                 questionTime: meta.questionTime || prev.questionTime
               }))
-              // We won't modify questions array here; info card uses counts only
             }
           } catch {}
         }
@@ -151,13 +152,12 @@ const CreateQuiz = () => {
     load()
   }, [searchParams, currentUser])
 
-
   // Mark as unsaved when data changes
   useEffect(() => {
     setHasUnsavedChanges(true)
   }, [formData, questions])
 
-  // Scroll to top when success screen (quizCode) is shown to avoid landing mid-page
+  // Scroll to top when success screen (quizCode) is shown
   useEffect(() => {
     if (quizCode) {
       window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
@@ -177,6 +177,13 @@ const CreateQuiz = () => {
       return () => document.removeEventListener('keydown', handleKeyDown)
     }
   }, [showQR])
+
+  // Handle AI questions generated
+  const handleAIQuestionsGenerated = (aiQuestions) => {
+    setQuestions(aiQuestions)
+    setCreationMode('manual')
+    success(`${aiQuestions.length} AI-generated questions added! You can now edit them.`)
+  }
 
   const addQuestion = () => {
     const newQuestion = {
@@ -201,7 +208,6 @@ const CreateQuiz = () => {
     ))
   }
 
-  // Helper function to check if an option is a duplicate
   const isDuplicateOption = (question, optionIndex, value) => {
     return question.options.some((option, index) => 
       index !== optionIndex && option === value && value.trim() !== ''
@@ -213,15 +219,13 @@ const CreateQuiz = () => {
       if (q.id === questionId) {
         const newOptions = [...q.options]
         
-        // Check for exact duplicates (case-sensitive) but allow different cases
         const isDuplicate = newOptions.some((option, index) => 
           index !== optionIndex && option === value && value.trim() !== ''
         )
         
         if (isDuplicate && value.trim() !== '') {
-          // Show error message for exact duplicate
           error(`Duplicate option "${value}" is not allowed. Use different text or change the case.`)
-          return q // Don't update if it's an exact duplicate
+          return q
         }
         
         newOptions[optionIndex] = value
@@ -259,10 +263,7 @@ const CreateQuiz = () => {
       const newQuestions = [...questions]
       const draggedQuestion = newQuestions[draggedItem]
       
-      // Remove dragged item
       newQuestions.splice(draggedItem, 1)
-      
-      // Insert at new position
       newQuestions.splice(dropIndex, 0, draggedQuestion)
       
       setQuestions(newQuestions)
@@ -295,7 +296,6 @@ const CreateQuiz = () => {
       return
     }
     
-    // Check for duplicate options in each MCQ question (case-sensitive)
     for (const question of questions) {
       if (question.type === 'mcq') {
         const optionTexts = question.options.filter(opt => opt.trim() !== '')
@@ -309,7 +309,6 @@ const CreateQuiz = () => {
       }
     }
     
-    // Validate timer - check if questionTime is valid and at least 5 seconds
     const questionTime = Number(formData.questionTime)
     if (!formData.questionTime || formData.questionTime === '' || isNaN(questionTime)) {
       error('Please enter a valid timer value for questions.')
@@ -324,33 +323,27 @@ const CreateQuiz = () => {
       return
     }
 
-        setIsSubmitting(true)
+    setIsSubmitting(true)
 
     try {
-      // Preparing quiz data for submission
-      
-      // Test Firebase connection first
       const isConnected = await testFirebaseConnection()
       if (!isConnected) {
         error('Failed to connect to Firebase. Please check your internet connection.')
         return
       }
       
-      // Determine host/creator ID
       const hostId = (currentUser && !currentUser.isGuest)
         ? currentUser.uid
         : `guest_${Date.now()}`
       
       const sanitizedQuestionTime = Number(formData.questionTime) || 30
-      
-      // Ensure timer value is valid for production
 
       const quizData = {
         title: formData.title,
         description: formData.description,
         showAnswers: formData.showAnswers,
         enableRating: formData.enableRating,
-        questionTime: sanitizedQuestionTime, // Use sanitized value explicitly
+        questionTime: sanitizedQuestionTime,
         questions: questions.map(q => ({
           text: q.text,
           type: q.type,
@@ -365,20 +358,15 @@ const CreateQuiz = () => {
         showLeaderboard: false
       }
 
-      // Creating quiz with prepared data
-      
       const quizId = await createQuiz(quizData)
       
-      // Store host ID for this quiz
       localStorage.setItem('userId', hostId)
       const code = quizId.slice(-6).toUpperCase()
       
-      // Set host flag for later use
       localStorage.setItem('isQuizHost', quizId)
       
       setQuizCode(code)
       
-      // Clear the draft since quiz was successfully created
       localStorage.removeItem('quizDraft')
       setHasUnsavedChanges(false)
       setAutoSaveStatus('saved')
@@ -397,10 +385,8 @@ const CreateQuiz = () => {
       await navigator.clipboard.writeText(quizCode)
       setCopySuccess(true)
       success('Quiz code copied to clipboard!')
-      // Reset copy success state after 2 seconds
       setTimeout(() => setCopySuccess(false), 2000)
     } catch (err) {
-      // Fallback for browsers that don't support clipboard API
       const textArea = document.createElement('textarea')
       textArea.value = quizCode
       document.body.appendChild(textArea)
@@ -413,7 +399,6 @@ const CreateQuiz = () => {
     }
   }
 
-  // Toggle QR Code
   const toggleQRCode = async () => {
     if (showQR) {
       setShowQR(false)
@@ -422,7 +407,6 @@ const CreateQuiz = () => {
     
     if (!quizCode) return
     
-    // If QR code is already generated, just show it
     if (qrCodeDataUrl) {
       setShowQR(true)
       return
@@ -431,35 +415,28 @@ const CreateQuiz = () => {
     try {
       const joinLink = `${window.location.origin}/join?code=${quizCode}`
       
-      // Create QR code using a simple canvas approach
       const canvas = document.createElement('canvas')
       const ctx = canvas.getContext('2d')
-      const size = 600  // Much larger size for full-screen display
+      const size = 600
       canvas.width = size
       canvas.height = size
       
-      // Use Google Charts QR Code API as a reliable fallback
-      // This creates a real, scannable QR code
       try {
         const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(joinLink)}&format=png&margin=1`
         
-        // Create an image element to load the QR code
         const img = new Image()
         img.crossOrigin = 'anonymous'
         
         img.onload = () => {
-          // Clear canvas and draw the QR code
           ctx.fillStyle = '#ffffff'
           ctx.fillRect(0, 0, size, size)
           ctx.drawImage(img, 0, 0, size, size)
           
-          // Convert to data URL and update state
           const dataUrl = canvas.toDataURL('image/png')
           setQrCodeDataUrl(dataUrl)
         }
         
         img.onerror = () => {
-          // If API fails, create a fallback display
           console.warn('QR API failed, creating manual fallback')
           createManualFallback()
         }
@@ -471,21 +448,17 @@ const CreateQuiz = () => {
         createManualFallback()
       }
       
-      // Fallback function for when QR generation fails
       const createManualFallback = () => {
         ctx.fillStyle = '#ffffff'
         ctx.fillRect(0, 0, size, size)
         
-        // Create a clean fallback design
         ctx.fillStyle = '#f8fafc'
         ctx.fillRect(50, 50, size - 100, size - 100)
         
-        // Border
         ctx.strokeStyle = '#e2e8f0'
         ctx.lineWidth = 2
         ctx.strokeRect(50, 50, size - 100, size - 100)
         
-        // Content
         ctx.fillStyle = '#1e293b'
         ctx.font = 'bold 24px system-ui'
         ctx.textAlign = 'center'
@@ -498,7 +471,6 @@ const CreateQuiz = () => {
         ctx.font = 'bold 14px monospace'
         ctx.fillStyle = '#0f172a'
         
-        // Split URL if too long
         const maxWidth = size - 120
         const words = joinLink.split('/')
         let line1 = words.slice(0, 3).join('/')
@@ -511,7 +483,6 @@ const CreateQuiz = () => {
         ctx.fillStyle = '#64748b'
         ctx.fillText(`Or enter code: ${quizCode}`, size/2, size/2 + 70)
         
-        // Convert to data URL
         const dataUrl = canvas.toDataURL('image/png')
         setQrCodeDataUrl(dataUrl)
       }
@@ -524,24 +495,19 @@ const CreateQuiz = () => {
     }
   }
 
-
-  // Check if user needs authentication or email verification
   const needsAuthentication = !currentUser || (currentUser && !currentUser.isGuest && !currentUser.emailVerified)
   
-  // If user is not authenticated or not verified, show authentication requirement
   if (needsAuthentication) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center px-4 py-8 sm:py-12">
         <div className="w-full max-w-6xl mx-auto">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12 items-center">
-            {/* Left Side - Branding & Benefits */}
             <motion.div
               initial={{ opacity: 0, x: -30 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6 }}
               className="text-center lg:text-left order-2 lg:order-1"
             >
-              {/* Back Button */}
               <button
                 onClick={() => navigate('/')}
                 className="inline-flex items-center space-x-2 text-gray-600 hover:text-primary-600 mb-6 sm:mb-8 transition-colors duration-200 min-h-[44px]"
@@ -550,7 +516,6 @@ const CreateQuiz = () => {
                 <span>Back to Home</span>
               </button>
 
-              {/* Brand Logo */}
               <div className="flex items-center justify-center lg:justify-start space-x-3 mb-6 sm:mb-8">
                 <div className="w-12 h-12 sm:w-16 sm:h-16 bg-gradient-to-br from-primary-500 to-primary-600 rounded-3xl flex items-center justify-center shadow-lg">
                   <Sparkles className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
@@ -561,7 +526,6 @@ const CreateQuiz = () => {
                 </div>
               </div>
 
-              {/* Headline */}
               <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-gray-900 mb-4 sm:mb-6 leading-tight">
                 Start Creating
                 <span className="block text-gradient">Amazing Quizzes</span>
@@ -571,7 +535,6 @@ const CreateQuiz = () => {
                 Join thousands of educators and creators who trust Quizzer to build engaging, interactive learning experiences.
               </p>
 
-              {/* Benefits List */}
               <div className="space-y-4">
                 <div className="flex items-center justify-center lg:justify-start space-x-3">
                   <div className="w-10 h-10 bg-green-100 rounded-2xl flex items-center justify-center">
@@ -594,18 +557,15 @@ const CreateQuiz = () => {
               </div>
             </motion.div>
 
-            {/* Right Side - Authentication Required */}
             <motion.div
               initial={{ opacity: 0, x: 30 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
               className="relative order-1 lg:order-2"
             >
-              {/* Background Decoration - Hidden on mobile */}
               <div className="absolute -top-6 -right-6 w-72 h-72 bg-gradient-to-br from-primary-200/20 to-purple-200/20 rounded-full blur-3xl hidden lg:block"></div>
               
               <div className="relative bg-white rounded-2xl lg:rounded-3xl shadow-2xl border border-gray-100 p-6 sm:p-8 lg:p-10">
-                {/* Header */}
                 <div className="text-center mb-6 sm:mb-8">
                   <div className="w-12 h-12 sm:w-16 sm:h-16 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl flex items-center justify-center mx-auto mb-3 sm:mb-4 shadow-lg">
                     <Lock className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
@@ -621,7 +581,6 @@ const CreateQuiz = () => {
                   </p>
                 </div>
 
-                {/* Authentication Action */}
                 <div className="text-center">
                   <button
                     onClick={() => setShowAuthModal(true)}
@@ -634,7 +593,6 @@ const CreateQuiz = () => {
                   </button>
                 </div>
 
-                {/* Security Note */}
                 <div className="mt-6 sm:mt-8 p-4 bg-gray-50 rounded-2xl">
                   <div className="flex items-start space-x-3">
                     <Shield className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
@@ -651,14 +609,12 @@ const CreateQuiz = () => {
           </div>
         </div>
         
-        {/* Authentication Modal */}
         <AnimatePresence>
           {showAuthModal && (
             <AuthenticationModal
               onClose={() => setShowAuthModal(false)}
               onSuccess={() => {
                 setShowAuthModal(false)
-                // The component will re-render automatically due to currentUser state change
               }}
             />
           )}
@@ -670,7 +626,6 @@ const CreateQuiz = () => {
   if (quizCode) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-primary-50 via-white to-secondary-50">
-        {/* Header */}
         <div className="backdrop-blur-xl bg-white/70 border-b border-white/20 px-4 sm:px-6 py-4">
           <div className="max-w-4xl mx-auto flex items-center justify-between">
             <div className="flex items-center space-x-3">
@@ -688,7 +643,6 @@ const CreateQuiz = () => {
           </div>
         </div>
 
-        {/* Main Content */}
         <div className="flex-1 flex items-center justify-center px-4 sm:px-6 py-4">
           <div className="w-full max-w-lg">
             <motion.div
@@ -697,7 +651,6 @@ const CreateQuiz = () => {
               transition={{ duration: 0.6 }}
               className="space-y-5"
             >
-              {/* Success Header */}
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -717,14 +670,12 @@ const CreateQuiz = () => {
                 </h1>
               </motion.div>
 
-              {/* Main Card - Slightly Bigger */}
               <motion.div
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ delay: 0.4, duration: 0.5 }}
                 className="bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden"
               >
-                {/* Quiz Info Header */}
                 <div className="bg-gradient-to-r from-primary-50 to-secondary-50 px-6 py-4 border-b border-gray-100">
                   <h3 className="font-semibold text-gray-900 text-lg mb-1">
                     {formData.title}
@@ -738,7 +689,6 @@ const CreateQuiz = () => {
                   </div>
                 </div>
 
-                {/* Quiz Code Section */}
                 <div className="px-6 py-5">
                   <div className="text-center mb-5">
                     <p className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">
@@ -749,7 +699,6 @@ const CreateQuiz = () => {
                     </div>
                   </div>
 
-                  {/* Copy Actions - Inline */}
                   <div className="flex gap-3 mb-5">
                     <motion.button
                       whileHover={{ scale: 1.02 }}
@@ -783,7 +732,6 @@ const CreateQuiz = () => {
                           setCopyLinkSuccess(true)
                           setTimeout(() => setCopyLinkSuccess(false), 2000)
                         } catch {
-                          // Fallback
                           const link = `${window.location.origin}/join?code=${quizCode || ''}`
                           const ta = document.createElement('textarea')
                           ta.value = link
@@ -806,7 +754,6 @@ const CreateQuiz = () => {
                     </button>
                   </div>
 
-                  {/* QR Code Section */}
                   <div className="mb-5">
                     <button
                       onClick={toggleQRCode}
@@ -817,7 +764,6 @@ const CreateQuiz = () => {
                     </button>
                   </div>
 
-                  {/* Primary Action */}
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
@@ -838,7 +784,6 @@ const CreateQuiz = () => {
           </div>
         </div>
 
-        {/* Full-Screen QR Code Overlay */}
         <AnimatePresence>
           {showQR && (
             <motion.div
@@ -849,7 +794,6 @@ const CreateQuiz = () => {
               className="fixed inset-0 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center z-50"
               onClick={() => setShowQR(false)}
             >
-              {/* Close Button */}
               <button
                 onClick={() => setShowQR(false)}
                 className="absolute top-6 right-6 w-14 h-14 bg-white/10 hover:bg-white/20 rounded-full flex items-center justify-center transition-all duration-150 backdrop-blur-md border border-white/20 group"
@@ -857,7 +801,6 @@ const CreateQuiz = () => {
                 <X className="w-7 h-7 text-white group-hover:scale-110 transition-transform duration-150" />
               </button>
 
-              {/* QR Code Content */}
               <motion.div
                 initial={{ scale: 0.95, opacity: 0, y: 10 }}
                 animate={{ scale: 1, opacity: 1, y: 0 }}
@@ -866,7 +809,6 @@ const CreateQuiz = () => {
                 className="text-center max-w-2xl mx-auto px-6"
                 onClick={(e) => e.stopPropagation()}
               >
-                {/* Header */}
                 <div className="mb-8">
                   <motion.h1 
                     initial={{ opacity: 0, y: -10 }}
@@ -887,7 +829,6 @@ const CreateQuiz = () => {
                   </motion.div>
                 </div>
 
-                {/* QR Code */}
                 <motion.div
                   initial={{ scale: 0.9, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
@@ -910,7 +851,6 @@ const CreateQuiz = () => {
                   )}
                 </motion.div>
 
-                {/* Instructions */}
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -932,7 +872,6 @@ const CreateQuiz = () => {
     )
   }
 
-  // Calculate progress
   const totalSteps = 3
   const currentStep = formData.title ? (questions[0]?.text ? 3 : 2) : 1
   const progress = (currentStep / totalSteps) * 100
@@ -940,7 +879,6 @@ const CreateQuiz = () => {
   return (
     <div className="min-h-screen pt-14 sm:pt-16 bg-gradient-to-br from-blue-50 via-white to-purple-50">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
-        {/* Enhanced Header */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -957,7 +895,6 @@ const CreateQuiz = () => {
               <span className="font-medium text-sm sm:text-base">Back to Home</span>
             </button>
             
-            {/* Progress Indicator */}
             <div className="flex items-center space-x-2 sm:space-x-3">
               <div className="text-xs sm:text-sm font-medium text-gray-600 whitespace-nowrap">
                 Step {currentStep} of {totalSteps}
@@ -992,18 +929,66 @@ const CreateQuiz = () => {
           </div>
         </motion.div>
 
-        {/* Enhanced Form Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8">
-          {/* Main Content - Quiz Setup */}
           <div className="lg:col-span-2 space-y-6 lg:space-y-8">
-            <motion.form
+            <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.3 }}
-              onSubmit={handleSubmit}
-              className="space-y-8"
+              className="bg-white rounded-2xl shadow-xl border border-gray-100 p-2"
             >
-              {/* Step 1: Basic Information */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCreationMode('manual')}
+                  className={`flex items-center justify-center space-x-2 px-6 py-4 rounded-xl font-semibold transition-all duration-300 ${
+                    creationMode === 'manual'
+                      ? 'bg-gradient-to-r from-primary-500 to-primary-600 text-white shadow-lg'
+                      : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  <Target className="w-5 h-5" />
+                  <span>Manual Creation</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreationMode('ai')}
+                  className={`flex items-center justify-center space-x-2 px-6 py-4 rounded-xl font-semibold transition-all duration-300 ${
+                    creationMode === 'ai'
+                      ? 'bg-gradient-to-r from-purple-500 to-purple-600 text-white shadow-lg'
+                      : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  <Sparkles className="w-5 h-5" />
+                  <span>AI Generation</span>
+                </button>
+              </div>
+            </motion.div>
+
+            <AnimatePresence mode="wait">
+              {creationMode === 'ai' ? (
+                <motion.div
+                  key="ai-mode"
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <AIQuizGenerator
+                    onQuestionsGenerated={handleAIQuestionsGenerated}
+                    onError={error}
+                  />
+                </motion.div>
+              ) : (
+                <motion.form
+                  key="manual-mode"
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ duration: 0.3 }}
+                  onSubmit={handleSubmit}
+                  className="space-y-8"
+                >
               <motion.div
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -1022,7 +1007,6 @@ const CreateQuiz = () => {
                       </div>
                     </div>
                     
-                    {/* Auto-save Status Indicator - Hidden on mobile */}
                     <div className="hidden sm:flex items-center space-x-2 text-white/90">
                       {autoSaveStatus === 'saving' && (
                         <>
@@ -1071,7 +1055,6 @@ const CreateQuiz = () => {
                         placeholder="e.g., 'Science Quiz for Grade 5'"
                         required
                       />
-                      
                     </div>
                     
                     <div>
@@ -1086,7 +1069,6 @@ const CreateQuiz = () => {
                         rows="3"
                         placeholder="Optional: Add a brief description..."
                       />
-                      
                     </div>
                     
                     <div className="grid grid-cols-1 gap-4">
@@ -1102,27 +1084,21 @@ const CreateQuiz = () => {
                             onChange={(e) => {
                               const val = e.target.value
                               
-                              // Allow empty string for user to clear the input
                               if (val === '') {
                                 setFormData({ ...formData, questionTime: '' })
                                 return
                               }
                               
-                              // Parse the input value
                               const num = parseInt(val, 10)
                               
-                              // Only update if it's a valid number, but don't clamp it
-                              // Let the user enter any value and validate on submit
                               if (!isNaN(num) && num >= 0) {
                                 setFormData({ ...formData, questionTime: num })
                               }
                             }}
                             onWheel={(e) => {
-                              // Prevent wheel events from changing the number input value
                               e.target.blur()
                             }}
                             onFocus={(e) => {
-                              // Select all text when focused for easier editing
                               e.target.select()
                             }}
                             className="w-full px-4 py-3 sm:py-4 pr-14 sm:pr-16 border-2 border-gray-200 rounded-2xl focus:border-primary-500 focus:ring-4 focus:ring-primary-200 transition-all duration-200 text-base sm:text-lg"
@@ -1140,7 +1116,6 @@ const CreateQuiz = () => {
                 </div>
               </motion.div>
 
-              {/* Step 2: Questions */}
               <motion.div
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -1162,7 +1137,6 @@ const CreateQuiz = () => {
                 </div>
                 
                 <div className="p-4 sm:p-6 lg:p-8">
-
                   {questions.length === 0 ? (
                     <div className="text-center py-12">
                       <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -1181,7 +1155,6 @@ const CreateQuiz = () => {
                     </div>
                   ) : (
                     <div className="space-y-6">
-                      {/* Drag & Drop Hint */}
                       {questions.length > 1 && (
                         <motion.div
                           initial={{ opacity: 0, y: -10 }}
@@ -1214,7 +1187,6 @@ const CreateQuiz = () => {
                                 : 'border-gray-200 hover:shadow-lg hover:border-primary-200'
                             }`}
                           >
-                            {/* Question Header */}
                             <div className="bg-white px-6 py-4 border-b border-gray-200">
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center space-x-3">
@@ -1254,9 +1226,7 @@ const CreateQuiz = () => {
                               </div>
                             </div>
 
-                            {/* Question Content */}
                             <div className="p-6 space-y-6">
-                              {/* Question Text */}
                               <div>
                                 <label className="flex items-center space-x-2 text-sm font-semibold text-gray-700 mb-3">
                                   <HelpCircle className="w-4 h-4 text-primary-500" />
@@ -1280,7 +1250,6 @@ const CreateQuiz = () => {
                                 </div>
                               </div>
 
-                              {/* Question Type */}
                               <div>
                                 <label className="flex items-center space-x-2 text-sm font-semibold text-gray-700 mb-3">
                                   <Settings className="w-4 h-4 text-primary-500" />
@@ -1331,7 +1300,6 @@ const CreateQuiz = () => {
                                 </div>
                               </div>
 
-                              {/* Question Options */}
                               {question.type === 'mcq' && (
                                 <div>
                                   <label className="flex items-center space-x-2 text-sm font-semibold text-gray-700 mb-4">
@@ -1375,7 +1343,6 @@ const CreateQuiz = () => {
                                             value={option}
                                             onChange={(e) => updateOption(question.id, optionIndex, e.target.value)}
                                             className={`flex-1 px-4 py-3 border-2 rounded-2xl transition-all duration-200 ${
-                                              // Check if this option is a duplicate
                                               isDuplicateOption(question, optionIndex, option) && option.trim() !== ''
                                                 ? 'border-red-400 bg-red-50 focus:border-red-500 focus:ring-4 focus:ring-red-200 text-red-700'
                                                 : question.correctAnswer === optionIndex
@@ -1386,7 +1353,6 @@ const CreateQuiz = () => {
                                             required
                                           />
                                           
-                                          {/* Duplicate warning icon */}
                                           {isDuplicateOption(question, optionIndex, option) && option.trim() !== '' && (
                                             <motion.div
                                               initial={{ scale: 0, rotate: -180 }}
@@ -1403,7 +1369,6 @@ const CreateQuiz = () => {
                                       </div>
                                     ))}
                                   </div>
-                                  
                                 </div>
                               )}
 
@@ -1481,7 +1446,6 @@ const CreateQuiz = () => {
                         ))}
                       </AnimatePresence>
                       
-                      {/* Add Question Button - Now at the bottom */}
                       <motion.div
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -1499,18 +1463,15 @@ const CreateQuiz = () => {
                       </motion.div>
                     </div>
                   )}
-
                 </div>
               </motion.div>
               
-              {/* Submit Section */}
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.6 }}
                 className="flex flex-col items-center gap-4 pt-8"
               >
-                {/* Enable Rating - Styled Toggle Card (UI only) */}
                 <div
                   className={`w-full rounded-2xl border p-4 sm:p-5 transition-all duration-300 ${
                     formData.enableRating
@@ -1519,7 +1480,6 @@ const CreateQuiz = () => {
                   }`}
                 >
                   <div className="flex items-start gap-4">
-                    {/* Toggle Switch (clickable label for better UX) */}
                     <label htmlFor="enableRating" className="relative inline-flex h-7 w-12 flex-shrink-0 items-center mt-0.5 cursor-pointer select-none">
                       <input
                         id="enableRating"
@@ -1541,7 +1501,6 @@ const CreateQuiz = () => {
                       />
                     </label>
 
-                    {/* Text Content */}
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
@@ -1562,7 +1521,6 @@ const CreateQuiz = () => {
                   </div>
                 </div>
 
-            {/* Actions: Save Draft and Create Quiz */}
             <div className="w-full flex flex-col sm:flex-row flex-wrap items-center justify-center gap-2 sm:gap-3">
               <button
                 type="button"
@@ -1572,7 +1530,6 @@ const CreateQuiz = () => {
                     setSavingDraft(true)
                     const draftPayload = { formData, questions, timestamp: Date.now() }
                     if (!currentUser || currentUser.isGuest) {
-                      // Save locally for guests
                       localStorage.setItem('quizDraft', JSON.stringify(draftPayload))
                       setLastSaved(new Date())
                       setHasUnsavedChanges(false)
@@ -1600,8 +1557,6 @@ const CreateQuiz = () => {
                 <span>{savingDraft ? 'Saving...' : 'Save Draft'}</span>
               </button>
 
-              {/* Divider removed for tighter spacing between actions */}
-
               <button
                 type="submit"
                 disabled={isSubmitting || !formData.title || questions.some(q => !q.text.trim())}
@@ -1622,11 +1577,11 @@ const CreateQuiz = () => {
             </div>
               </motion.div>
             </motion.form>
+              )}
+            </AnimatePresence>
           </div>
           
-          {/* Sidebar - Tips and Preview */}
           <div className="lg:col-span-1 space-y-6">
-            {/* Quick Tips */}
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -1683,7 +1638,6 @@ const CreateQuiz = () => {
               </div>
             </motion.div>
             
-            {/* Quiz Preview */}
             {formData.title && (
               <motion.div
                 initial={{ opacity: 0, x: 20 }}

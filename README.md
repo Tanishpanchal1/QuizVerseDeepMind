@@ -1,227 +1,261 @@
-# Quizzer 🧠
+# QuizVerseDeepMind
 
-A modern, interactive quiz platform built with React, Firebase, and beautiful animations. Create, share, and play quizzes in real-time with a stunning user interface.
+QuizVerseDeepMind is a real-time quiz and learning platform built with React,
+Firebase, and an AI-assisted practice workflow. Users can create quizzes,
+share them, host live sessions, join with a code, compete on synchronized
+leaderboards, and practice generated question sets with immediate feedback.
 
-## ✨ Features
+The repository is the AI-enhanced evolution of the original QuizVerse
+application. It combines a Firebase-backed multiplayer product with a
+separate Node.js service for AI question generation.
 
-- **🎨 Beautiful UI/UX**: Modern design with smooth animations and glassmorphism effects
-- **🚀 Real-time Updates**: Live quiz sessions with instant synchronization
-- **📱 Responsive Design**: Works perfectly on all devices
-- **🔐 Authentication**: Google Sign-In and guest mode support
-- **⚡ Fast Performance**: Built with Vite and optimized React components
-- **🎯 Multiple Question Types**: MCQ, True/False, and Short Answer questions
-- **🏆 Live Leaderboard**: Real-time scoring and competition
-- **⏱️ Timer System**: Configurable time limits per question
-- **📊 Progress Tracking**: Visual progress indicators and analytics
+## Product capabilities
 
-## 🛠️ Tech Stack
+### Quiz creation and sharing
 
-- **Frontend**: React 18, Vite, Tailwind CSS
-- **Animations**: Framer Motion
-- **Icons**: Lucide React
-- **Backend**: Firebase (Firestore, Authentication)
-- **Styling**: Tailwind CSS with custom design system
-- **Routing**: React Router DOM
+- Create quizzes with multiple-choice, true/false, and short-answer questions
+- Configure quiz titles, descriptions, question settings, and time limits
+- Save drafts and continue editing later
+- Share quizzes using generated share links
+- View and manage quizzes created by the current user
 
-## 🚀 Quick Start
+### Live multiplayer sessions
+
+- Join a quiz with a share code
+- Support authenticated users and guest participants
+- Synchronize quiz-room state through Firestore listeners
+- Track answers, scores, progress, and session state in real time
+- Display a live leaderboard and end-of-session results
+- Present responsive question, timer, and progress interfaces
+
+### AI practice
+
+The `Practice With AI` flow creates a focused learning session from a subject,
+topic, difficulty, question count, question types, and learning goal. It
+supports:
+
+- AI-generated practice questions
+- Practice sessions with immediate answer feedback
+- Explanations and session summaries
+- Progress tracking during a session
+- Booster sessions based on weak topics from a summary
+- Demo mode when the AI backend is not configured
+
+The repository also includes an `AIQuizGenerator` component for generating
+question sets from quiz configuration.
+
+### Analytics and learning insights
+
+- Session summaries and score breakdowns
+- Accuracy and answer-distribution charts
+- Question-level progress indicators
+- Quiz dashboards and real-time leaderboard views
+- Firebase-backed statistics and analytics helpers
+
+## System architecture
+
+```text
+React/Vite web application
+        |
+        +--> Firebase Authentication
+        |
+        +--> Firestore
+        |      ├── quizzes and drafts
+        |      ├── shared quizzes
+        |      ├── live sessions and answers
+        |      └── statistics and leaderboards
+        |
+        +--> Firebase Cloud Functions
+        |
+        +--> AI practice service (optional)
+               Node.js + Express + Mistral API
+```
+
+The main frontend is a Vite application. Firebase provides authentication,
+real-time data synchronization, database rules, indexes, and server-side
+functions. The optional AI service runs separately from the frontend and
+keeps the Mistral API key on the server.
+
+## Repository layout
+
+```text
+.
+├── src/
+│   ├── components/          # Quiz UI, AI generation, charts, feedback
+│   ├── contexts/            # Auth, quiz, and toast state
+│   ├── hooks/               # Practice sessions and quiz statistics
+│   ├── pages/               # Home, create, join, room, sharing, practice
+│   ├── services/            # Quiz, draft, sharing, and analytics services
+│   ├── firebase/            # Firebase client configuration
+│   └── utils/                # Diagnostics and chart helpers
+├── ai-backend/
+│   ├── server.mjs           # Optional Express/Mistral question service
+│   └── readme.md
+├── functions/src/index.ts   # Firebase Functions implementation
+├── quizverse-functions/     # Additional Functions package/configuration
+├── firestore.rules          # Firestore security rules
+├── firestore.indexes.json   # Firestore query indexes
+├── FIREBASE_SETUP.md        # Firebase configuration guide
+├── FIREBASE_TROUBLESHOOTING.md
+├── REALTIME_ANALYTICS.md    # Analytics data and deployment notes
+├── deploy.md                # Hosting and Functions deployment
+└── netlify.toml             # Netlify build configuration
+```
+
+## Technology
+
+### Frontend
+
+- React 18
+- Vite
+- React Router
+- Firebase Web SDK
+- Tailwind CSS
+- Framer Motion
+- Lucide React
+- Chart.js
+
+### Backend services
+
+- Firebase Authentication
+- Cloud Firestore
+- Firebase Cloud Functions
+- Firebase security rules and composite indexes
+- Node.js and Express for the optional AI backend
+- Mistral API for AI question generation
+
+## Getting started
 
 ### Prerequisites
 
-- Node.js 16+ 
-- npm or yarn
-- Firebase account
+- Node.js 18 or newer
+- npm
+- A Firebase project for authentication and Firestore-backed features
+- A Mistral API key only if AI generation is enabled
 
-### 1. Clone the Repository
-
-```bash
-git clone <your-repo-url>
-cd quizzer
-```
-
-### 2. Install Dependencies
+### Install and run the frontend
 
 ```bash
+git clone https://github.com/Tanishpanchal1/QuizVerseDeepMind.git
+cd QuizVerseDeepMind
 npm install
-```
-
-### 3. Firebase Setup
-
-1. Go to [Firebase Console](https://console.firebase.google.com/)
-2. Create a new project
-3. Enable Authentication (Google Sign-In)
-4. Enable Firestore Database
-5. Get your Firebase config
-
-### 4. Configure Firebase
-
-Update `src/firebase/config.js` with your Firebase configuration:
-
-```javascript
-const firebaseConfig = {
-  apiKey: "your-api-key",
-  authDomain: "your-project.firebaseapp.com",
-  projectId: "your-project-id",
-  storageBucket: "your-project.appspot.com",
-  messagingSenderId: "your-sender-id",
-  appId: "your-app-id"
-}
-```
-
-### 5. Start Development Server
-
-```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to view the app.
+Vite starts the development server and prints the local URL.
 
-## 📁 Project Structure
+### Configure Firebase
 
-```
-src/
-├── components/          # Reusable UI components
-│   ├── Navbar.jsx     # Navigation component
-│   └── ToastContainer.jsx # Notification system
-├── contexts/           # React contexts
-│   ├── AuthContext.jsx # Authentication state
-│   ├── QuizContext.jsx # Quiz state management
-│   └── ToastContext.jsx # Toast notifications
-├── pages/              # Page components
-│   ├── Home.jsx       # Landing page
-│   ├── CreateQuiz.jsx # Quiz creation form
-│   ├── JoinQuiz.jsx   # Quiz joining interface
-│   └── QuizRoom.jsx   # Live quiz interface
-├── firebase/           # Firebase configuration
-│   └── config.js      # Firebase setup
-├── App.jsx            # Main app component
-├── main.jsx           # App entry point
-└── index.css          # Global styles and Tailwind
-```
+1. Create or select a Firebase project.
+2. Enable Google Authentication and the required sign-in providers.
+3. Create a Firestore database.
+4. Configure the client values used by `src/firebase/config.js`.
+5. Review and deploy `firestore.rules` and `firestore.indexes.json`.
 
-## 🎮 How to Use
+The repository includes setup and troubleshooting guides:
 
-### Creating a Quiz
+- [`FIREBASE_SETUP.md`](FIREBASE_SETUP.md)
+- [`FIREBASE_TROUBLESHOOTING.md`](FIREBASE_TROUBLESHOOTING.md)
 
-1. Click "Create Quiz" on the homepage
-2. Fill in quiz details (title, description, time limits)
-3. Add questions with multiple choice, true/false, or short answer options
-4. Set correct answers for scoring
-5. Get a unique quiz code to share
+Do not commit production credentials or service-account files.
 
-### Joining a Quiz
+### Run the optional AI backend
 
-1. Click "Join Quiz" on the homepage
-2. Enter the 6-digit quiz code
-3. Enter your name
-4. Start playing when the host begins
-
-### Playing the Quiz
-
-- Answer questions within the time limit
-- See live leaderboard updates
-- View progress and results in real-time
-- Compete with other players
-
-## 🎨 Customization
-
-### Colors and Themes
-
-The app uses a custom design system with CSS variables. Update `tailwind.config.js` to modify:
-
-- Primary colors
-- Secondary colors
-- Accent colors
-- Shadows and borders
-
-### Animations
-
-Customize animations in `tailwind.config.js`:
-
-```javascript
-animation: {
-  'fade-in': 'fadeIn 0.5s ease-in-out',
-  'fade-in-up': 'fadeInUp 0.6s ease-out',
-  'slide-in': 'slideIn 0.3s ease-out',
-  // Add your custom animations
-}
+```bash
+cd ai-backend
+npm install
 ```
 
-## 📱 Responsive Design
+Create an environment file based on `ai-backend/.env.example` and provide the
+Mistral credentials/configuration required by the service:
 
-The app is fully responsive with breakpoints:
+```env
+MISTRAL_API_KEY=replace-this-value
+MISTRAL_MODEL_ID=mistral-tiny
+PORT=5000
+```
 
-- **Mobile**: < 768px
-- **Tablet**: 768px - 1024px
-- **Desktop**: > 1024px
+Start the service with the command defined in `ai-backend/package.json`.
+Keep this service server-side; never expose `MISTRAL_API_KEY` in the Vite
+client bundle.
 
-## 🔧 Available Scripts
+## Common user flows
 
-- `npm run dev` - Start development server
-- `npm run build` - Build for production
-- `npm run preview` - Preview production build
-- `npm run lint` - Run ESLint
+### Create a quiz
 
-## 🚀 Deployment
+1. Sign in or continue with the supported guest flow.
+2. Open **Create Quiz**.
+3. Enter quiz metadata and add questions.
+4. Select question types, answers, and timing options.
+5. Save the quiz or publish/share it.
 
-### Firebase Hosting
+### Host or join a live quiz
 
-1. Build the project:
-   ```bash
-   npm run build
-   ```
+1. Open a quiz room or use a shared quiz code.
+2. Participants join with a display name.
+3. The room synchronizes questions and answers through Firestore.
+4. Scores, progress, and the leaderboard update as the session runs.
 
-2. Install Firebase CLI:
-   ```bash
-   npm install -g firebase-tools
-   ```
+### Practice with AI
 
-3. Initialize Firebase:
-   ```bash
-   firebase init hosting
-   ```
+1. Open **Practice**.
+2. Choose a subject, topic, difficulty, count, types, and learning goal.
+3. Start the generated session.
+4. Submit answers to receive feedback and explanations.
+5. Review the summary and optionally start a targeted booster session.
 
-4. Deploy:
-   ```bash
-   firebase deploy
-   ```
+## Build and deployment
 
-### Other Platforms
+Build the frontend with:
 
-The app can be deployed to any static hosting platform:
-- Vercel
-- Netlify
-- GitHub Pages
-- AWS S3
+```bash
+npm run build
+npm run preview
+```
 
-## 🤝 Contributing
+The repository includes configuration for Firebase Hosting and Netlify. The
+deployment guide covers:
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+- Firebase client configuration
+- Firestore rules and indexes
+- Cloud Functions deployment
+- Static frontend hosting
+- Environment variables
 
-## 📄 License
+See [`deploy.md`](deploy.md) for the deployment flow.
 
-This project is licensed under the MIT License.
+## Available scripts
 
-## 🙏 Acknowledgments
+From the repository root:
 
-- [React](https://reactjs.org/) - UI library
-- [Tailwind CSS](https://tailwindcss.com/) - Utility-first CSS framework
-- [Framer Motion](https://www.framer.com/motion/) - Animation library
-- [Firebase](https://firebase.google.com/) - Backend services
-- [Lucide](https://lucide.dev/) - Beautiful icons
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the Vite development server |
+| `npm run build` | Create a production frontend build |
+| `npm run preview` | Preview the production build locally |
+| `npm run lint` | Run ESLint |
 
-## 📞 Support
+The Firebase Functions packages have their own package scripts and dependency
+configuration.
 
-If you have any questions or need help:
+## Security and operational notes
 
-1. Check the [Issues](https://github.com/your-repo/issues) page
-2. Create a new issue with detailed information
-3. Contact the development team
+- Firestore access is governed by `firestore.rules`; review the rules before
+  deploying.
+- Required Firestore indexes are declared in `firestore.indexes.json`.
+- AI provider credentials belong only in the server-side AI backend.
+- Firebase service-account credentials must remain outside the frontend bundle.
+- Verify Firebase project IDs and hosting targets before deploying.
 
----
+## Project status
 
-**Happy Quizzing! 🎉**
+QuizVerseDeepMind is a working application prototype with a substantial
+frontend, Firebase integration, live quiz flows, analytics components, and
+AI-assisted practice/generation paths. The optional AI service and Firebase
+deployment require environment-specific configuration. Production readiness
+depends on validating the configured Firebase project, security rules,
+provider quotas, and deployment environment.
 
+## License
+
+No license has currently been declared for this repository.
